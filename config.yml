@@ -1,0 +1,3 @@
+default:
+  reddit_client_id: ""
+  reddit_client_secret: ""
