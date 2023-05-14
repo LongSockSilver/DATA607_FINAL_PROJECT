@@ -1,0 +1,147 @@
+---
+title: "silver_final_project_reddit.Rmd"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+
+Now that I have The Ringer's Top 100 players, I need to get my conversational data from Reddit.
+
+```{r}
+library(httr)
+library(jsonlite)
+library(tidyverse)
+```
+
+First, I'll store my credentials, and generate an access token for the Reddit API. [FIX TO BE SECRET]
+
+```{r}
+client_id <- "HlPRXU4SgPF6P7Eg1lXE3Q"
+client_secret <- "hull8pmZTvEPF8SJM2PJa2Af3h_bdQ"
+
+reddit_token <- POST("https://www.reddit.com/api/v1/access_token",
+                     authenticate(client_id, client_secret),
+                     body = list(grant_type = "client_credentials"),
+                     encode = "form",
+                     add_headers("User-Agent" = "R Script")
+                    )
+
+access_token <- content(reddit_token)$access_token
+
+```
+
+I'll quickly check the status of my token to make sure I'm connected:
+
+```{r}
+http_status(reddit_token)
+```
+Excellent! Now I'll test a search for an individual name. Please not the exclusion of "game thread"--game threads and post game threads are highly popular live discussions on the subreddit, but they cloud individual player results (such threads contain player names by way of mentioning game stats, but aren't "about" those players per se).
+
+```{r}
+base_url <- "https://www.reddit.com"
+endpoint <- "/r/nba/search.json"
+player_name <- 'O.G. Anunoby'
+search_term <- paste0(player_name, ' NOT "game thread"')
+
+query_params <- list(q = search_term, sort = "top", limit = 100, 
+                     restrict_sr = "on", t = "year")
+
+response <- GET(url = paste0(base_url, endpoint), query = query_params, 
+                add_headers("User-Agent" = "nba_analysis_silver_data607"))
+
+```
+
+```{r}
+#check response
+response
+```
+
+```{r}
+#create dataframe
+test_df <- fromJSON(content(response, "text", encoding = "UTF-8"), flatten = TRUE)$data$children
+```
+
+```{r}
+#limit only to the columns I care about
+
+keep_cols <- c("data.title", "data.selftext", "data.author", "data.ups", "data.upvote_ratio",
+               "data.score", "data.num_comments", "data.total_awards_received", "data.link_flair_text", 
+               "data.author_flair_css_class", "data.created","data.domain",
+               "data.permalink", "data.url", "data.created_utc")
+
+test_df <- test_df %>%
+  select(keep_cols)
+```
+
+Looks like it works! Now I need to repeat this process for every player's name on my list.
+
+Let's pull in my clean Ringer Top 100 data:
+
+```{r}
+df_ringer <- read.csv("./data/nba_ringer_top100_TIDY.csv")
+```
+
+I'll initialize my overall dataframe with the columns from "keep_cols" that I created earlier, plus a new column to keep track of which threads correspond to each player.
+
+```{r}
+df <- data.frame(matrix(ncol = 16))
+colnames(df) <- append(keep_cols, "player_name")
+```
+
+Now, I'll loop through each player ...
+
+```{r}
+
+for (player in df_ringer$player_name) {
+  
+  #ping the reddit API
+  base_url <- "https://www.reddit.com"
+  endpoint <- "/r/nba/search.json"
+  player_name <- player
+  search_term <- paste0(player_name, ' NOT "game thread"')
+  
+  query_params <- list(q = search_term, sort = "top", limit = 100, 
+                       restrict_sr = "on", t = "year")
+  
+  response <- GET(url = paste0(base_url, endpoint), query = query_params, 
+                  add_headers("User-Agent" = "nba_analysis_silver_data607"))
+  
+  #create a new df
+  new_df <- fromJSON(content(response, "text", encoding = "UTF-8"), flatten = TRUE)$data$children
+  
+  #limit new_df to columns we care about. Add player name column.
+  new_df <- new_df %>%
+    select(keep_cols)
+  
+  new_df$player_name <- player
+  
+  #concatenate to overall df
+  df <- rbind(df, new_df)
+  
+  #rest the system so as not to over-ping the API
+  Sys.sleep(5)
+  
+}
+```
+
+```{r}
+#removing the empty row from up top
+df <- df[-1,]
+```
+
+It worked! I now have a dataframe of the top 100 (or slightly less in some cases) posts surrounding each player in The Ringer top 100
+
+```{r}
+df %>%
+  write.csv("./data/reddit_top100_posts.csv")
+```
+
+```{r}
+df
+```
+
+

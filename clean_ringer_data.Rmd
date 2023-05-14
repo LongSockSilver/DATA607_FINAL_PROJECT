@@ -1,0 +1,125 @@
+---
+title: "Cleaning Data from The Ringer's Top 100 NBA Players"
+output: html_document
+---
+
+### Introduction
+
+The goal for my project is to compare a list of who are considered the best players in the NBA (as designated by one popular sports media out) against those which are most frequently talked about on a popular pro basketball discussion forum, Reddit's r/nba community.
+
+Before I can analyze the data from The Ringer, I need to get it into a tidy, readable format. I developed a methodology for this in Project 2, which I will re-employ here.
+
+```{r}
+library(tidyverse)
+```
+
+##Dataset 1: Top 100 NBA Players (The Ringer)
+
+The Ringer is a sports media company whose NBA player rankings are a popular entertainment product. While the rankings are based on the subjective judgments of close watchers of the NBA, data is a massive part of their analysis. 
+
+However, due to the subjectivity of the rankings and the role of "eye test" and other non-quantitative assessments, the importance of particular datapoints is not entirely clear. Cleaning and analyzing the rankings may prove insightful as to what factors are seen as important to basketball experts, and whether having "top players" is connected to team success.
+
+```{r}
+df <- read.csv('./data/nba_ringer_top100_UNTIDY.csv')
+```
+
+Let's look at the data:
+
+```{r}
+head(df)
+```
+
+I'd like to get some preliminary column names in, even if they're somewhat meaningless and will be short-lived.
+
+```{r}
+colnames(df) = c('player_name', 'values1', 'values2',
+                   'values3', 'values4')
+
+head(df)
+```
+
+I see that the data I care about are broken up arbitrarily across a number of columns. However, the player names--which I'd like to use as my row identifiers--all appear in column 1. I can make sure all relevant data is connected to those names by "filling" them down the table until we reach a new player.
+
+```{r}
+
+#make sure blank strings are interpreted as null
+df$player_name[df$player_name == ''] <- NA
+
+#fill
+df <- df %>%
+  fill(player_name)
+
+head(df)
+```
+
+Now, I can pivot the data to be longer, consolidating all the metrics into one column. After that I can ditch the original "value" column names, which were arbitrary.
+
+```{r}
+df <- df %>%
+  pivot_longer(
+    cols = seq(2,5)
+  )
+
+#drop 'name', a set of arbitrary positional labels
+df <- df %>%
+  subset(select = -c(name))
+
+head(df)
+```
+
+All the values have a colon and space, we should be able to split out two columns by that separator. So the left column is the name and the right is the value.
+
+```{r}
+df <- df %>%
+  separate(col = value,
+           into = c('variable', 'value'),
+           sep = ': ')
+
+head(df)
+```
+
+Looking at the data, I realize I should actually re-pivot it to be wider. While cleaning data often means pivoting to a longer format, I feel that would only be appropriate if the values were consistent. However, we actually have different types of values. Team name is a string, for example, while the other variables are numbers. Some numbers are percentages while others are totals. 
+
+
+```{r}
+#pivot wider
+df <- df %>%
+  pivot_wider(names_from = variable,
+              values_from = value)
+
+#make sure player rank is included
+df$player_rank <- seq(1,100)
+
+head(df)
+```
+
+Now I want to change the column names to reflect some industry standard abbreviations.
+
+```{r}
+colnames(df) <- c('player_name', 'TEAM', 'POSITION', 'AGE', 'PTS',
+                  'FGM','FG%','3PM', '3P%', 'FTA', 'FT%', 'ORB', 
+                  'DRB', 'AST', 'TOV', 'STL', 'BLK', 'player_rank')
+
+head(df)
+```
+
+It seems the numerical columns were interpreted as strings, so I'll go through and fix their formatting. Percentages also came through as numbers between 1 and 100 (instead of between 0 and 1) making future calculations potential problematic; I'll divide those by 100 to ensure proper math down the road.
+
+```{r}
+#turn age into an integer and all other numerical values into doubles
+df[c(4:17)] <- sapply(df[c(4:17)], as.numeric)
+
+#turn any percentage column into a proper percentage by dividing by 100
+
+for (val in c('FG%', '3P%', 'FT%')) {
+    df[[val]] <- df[[val]] / 100 
+}
+
+```
+
+Ah! clean data. now I can do the analyses I'm interested in.
+
+```{r}
+df %>%
+  write.csv('./data/nba_ringer_top100_TIDY.csv')
+```

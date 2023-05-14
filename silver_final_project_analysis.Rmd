@@ -1,0 +1,212 @@
+---
+title: "silver_final_project_analysis"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#for analyses and visualizations
+library(tidyverse)
+library(ggimage)
+library(png)
+library(knitr)
+
+#for textual analysis / wordcloud / sentiment
+library(wordcloud)
+library(tm)
+library(SnowballC)
+library(syuzhet)
+```
+
+## Pulling in data
+
+Now that I have my Reddit data secured, I can begin constructing analyses with it.
+
+```{r}
+df_reddit <- read.csv("./data/reddit_top100_posts.csv")
+```
+
+I'm going to make a new dataframe tallying the total Reddit score for each player:
+
+```{r}
+df_rank <- df_reddit %>%
+  group_by(player_name) %>%
+  summarize(total_score = sum(data.score)) %>%
+  arrange(desc(total_score))
+```
+
+And now I can rank them according to that total score.
+```{r}
+df_rank <- df_rank %>%
+  mutate(reddit_rank = row_number())
+```
+
+This gives me a comparison point for the Ringer rankings, which I'll pull in now:
+
+```{r}
+df_ringer <- read.csv("./data/nba_ringer_top100_TIDY.csv")
+```
+
+Because I already have the field "player_rank" in my Ringer data, I can now bring that in as a variable in my overall ranking dataframe. I just need to conduct a merge using the player_names, which are identical across dataframes:
+
+```{r}
+df_ringer <- df_ringer %>%
+  rename(ringer_rank = player_rank)
+
+df_ringer_merge <- df_ringer %>%
+  select(c(player_name, ringer_rank))
+
+df_rank <- merge(df_rank, df_ringer_merge, by = "player_name")
+```
+
+For an initial visualization, let's compare reddit_rank to ringer_rank, to see if, generally speaking, players considered better by the ringer are also more popular discussion topics in the r/nba community:
+
+```{r}
+df_rank %>%
+  ggplot(aes(x = ringer_rank,
+             y = reddit_rank)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+While this is useful for overall understanding, it's easy to forget that each dot on this plot represents a player. For continued analysis, it would be useful (and, let's face it, fun) to see pictures of each player represented on the plot. This is possible with a package called **ggimage**.
+
+```{r}
+df_pic_files <- read.csv("data/nba_ringer_top100_pic_files.csv")
+```
+
+```{r}
+df_rank_pics <- merge(df_rank, df_pic_files, by = "player_name")
+```
+
+```{r}
+df_rank_pics %>%
+  ggplot(aes(x = ringer_rank,
+             y = reddit_rank,
+             image = picture_file_path)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  geom_image(size = 0.05)
+```
+
+Awesome! Now let's see the results of this model:
+
+```{r}
+model <- lm(reddit_rank ~ ringer_rank, data = df_rank)
+model_summary <- summary(model)
+
+model_summary
+```
+The model appears to fit decently well, meaning that, broadly, the "better" players as ranked by the Ringer tend to be discussed and upvoted more on r/nba. However, there are clearly many departures from this pattern hindering the model. These departures are reflected in the residuals produced by the model, which we can insert back into our table and see our biggest outliers:
+
+```{r}
+df_rank <- df_rank %>%
+  cbind(residual = residuals(model))
+```
+
+```{r}
+df_rank %>%
+  arrange(desc(residual))
+```
+
+Sorting this table by residuals is a great, quick way to understand discussion patterns relative to perceived player ability. Players with very low residuals (meaning high-ranking in Reddit discussions despite relatively low Ringer ranking) are perhaps discussed more popularly on Reddit than their skill might suggest. Players with high residuals are thought to be better players, but are perhaps under-discussed in spite of that. While I have some qualitative hunches for why this might be, continued analysis could help shed light on these patterns.
+
+### Wordcloud
+
+For any given player, it would be interesting to see common words coming up in Reddit threads involving them. Here, I define a function to do just that.
+
+```{r}
+
+make_player_wordcloud <-  function(player_name_wc) {
+
+  player_name_wc <- gsub("[[:punct:]]", "", player_name_wc)
+  player_name_split <- strsplit(player_name_wc, " ")[[1]]
+  player_name_split_lower <- tolower(player_name_split)
+  player_name_split_lower
+  
+  #limit text to particular player
+  text_col <- df_reddit %>%
+    filter(player_name == player_name_wc) %>%
+    select(data.title)
+  
+  #store text as corpus
+  corpus <- Corpus(VectorSource(text_col))
+  
+  #cleaning and processing the corpus
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("english"))
+  corpus <- tm_map(corpus, stripWhitespace)
+  
+  #creating term matrix
+  dtm <- TermDocumentMatrix(corpus)
+  
+  # Convert the matrix to a dataframe
+  m <- as.matrix(dtm)
+  v <- sort(rowSums(m),decreasing=TRUE)
+  
+  # Create a data frame with words and their frequencies
+  d <- data.frame(word = names(v),freq=v)
+  
+  #remove individual player's names from word list to not crowd out cloud
+  d <- d[!(d$word %in% player_name_split_lower),]
+  
+  # Generate the wordcloud
+  wordcloud(words = d$word, freq = d$freq, min.freq = 2,
+            max.words=400, random.order=FALSE, rot.per=0.35, 
+            colors=brewer.pal(8, "Dark2"))
+
+}
+
+```
+
+```{r}
+#suppressing warnings because some words can't fit on the page
+suppressWarnings(make_player_wordcloud("Draymond Green"))
+```
+
+```{r}
+df_reddit %>%
+  filter(player_name == "Draymond Green") %>%
+  head() %>%
+  select(c("data.title", "data.score"))
+```
+
+### Sentiment Analysis
+
+It seems that one of the things that might help shed light on why certain player's are "over-discussed" is whether they are associated with negative news stories. Therefore, some light sentiment analysis might be useful in understanding potential correlation here.
+
+```{r}
+df_reddit$post_title_sentiment <- get_sentiment(df_reddit$data.title)
+```
+
+Here, I'll make a new dataframe to track the average post sentiment for each player.
+```{r}
+df_reddit_sentiment <- df_reddit %>%
+  group_by(player_name) %>%
+  summarize(avg_sentiment = mean(post_title_sentiment))
+```
+
+Now, I'll add this average sentiment score to df_rank, to facilitate more correlation work.
+```{r}
+df_rank <- merge(df_rank, df_reddit_sentiment, by = 'player_name')
+```
+
+Finally, I can correlate residuals with average sentiment to see if text sentiment can help predict whether a player may be over- or under-discussed.
+
+```{r}
+df_rank %>%
+  ggplot(aes(x = avg_sentiment, 
+             y = residual)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+Sentiment--or at least, this particular measure of it, is clearly not a strong predictor of residuals in this case. More qualitative analysis may have to suffice for now.
+
