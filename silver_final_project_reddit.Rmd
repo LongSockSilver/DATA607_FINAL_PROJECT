@@ -15,13 +15,15 @@ Now that I have The Ringer's Top 100 players, I need to get my conversational da
 library(httr)
 library(jsonlite)
 library(tidyverse)
+library(config)
 ```
 
-First, I'll store my credentials, and generate an access token for the Reddit API. [FIX TO BE SECRET]
+First, I'll store my credentials, and generate an access token for the Reddit API.
 
 ```{r}
-client_id <- "HlPRXU4SgPF6P7Eg1lXE3Q"
-client_secret <- "hull8pmZTvEPF8SJM2PJa2Af3h_bdQ"
+conf <- config::get()
+client_id <- conf$reddit_client_id
+client_secret <- conf$reddit_client_secret
 
 reddit_token <- POST("https://www.reddit.com/api/v1/access_token",
                      authenticate(client_id, client_secret),
